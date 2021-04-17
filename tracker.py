@@ -3,117 +3,118 @@ import numpy as np
 import pandas as pd
 
 
-def coloriden_th_frame(frame, color):
-    blur = cv.GaussianBlur(frame, (19, 19), 0)
+def frame_cutter(frame, type, position):
+    if type == "center":
+        cutted_frame = frame[position[0][0]:position[0][1], position[1][0]:position[1][1]]
+    return cutted_frame
+
+
+def centroid_calculation(processed_frame):
+    m = cv.moments(processed_frame)  # calculates the moments. see en.wikipedia.org/wiki/Image_moment
+    cw = (m['m10'] / m['m00'])  # calculates the centroid
+    ch = (m['m01'] / m['m00'])
+    return cw, ch
+
+
+def csv_output(t, x, y, file_path):
+    pd.DataFrame(t, x, y).to_csv(file_path)  # output of the csv file
+
+
+def drop_filter(frame, color):
+    kernel = np.ones((7, 7), np.uint8)
+    blur = cv.GaussianBlur(frame, (25, 25), 0)
     hsv = cv.cvtColor(blur, cv.COLOR_BGR2HSV)
 
-    lower_yellow = np.array([15, 110, 20])
-    higher_yellow = np.array([60, 255, 255])
+    lower_yellow = np.array([5, 80, 20])
+    higher_yellow = np.array([80, 255, 255])
 
     if color == "yellow":
         mask = cv.inRange(hsv, lower_yellow, higher_yellow)
 
     res = cv.bitwise_and(frame, frame, mask=mask)
+
     res_grey = cv.cvtColor(cv.cvtColor(res, cv.COLOR_HSV2BGR), cv.COLOR_BGR2GRAY)
-    ret, res_th2 = cv.threshold(res_grey, 20, 255, cv.THRESH_BINARY)
-    kernel = np.ones((11, 11), np.uint8)
-    dilation = cv.dilate(res_th2, kernel, iterations=1)
 
-    return dilation
+    ret, res_th = cv.threshold(res_grey, 20, 255, cv.THRESH_BINARY)
 
-def show_trails(frame, inw, inh):
+    filtered_frame = cv.morphologyEx(res_th, cv.MORPH_CLOSE, kernel, iterations=2)
+
+    return filtered_frame, res_th
+
+
+def trail_display(frame, w, h):
     trails = frame
-    if len(inw) > 30:
-        for i in range(-1, -30, -3):
-            trails[inh[i], inw[i]] = [0, 0, 255]
-            trails[inh[i] + 1, inw[i]] = [0, 0, 255]
-            trails[inh[i], inw[i] + 1] = [0, 0, 255]
-            trails[inh[i] - 1, inw[i]] = [0, 0, 255]
-            trails[inh[i], inw[i] - 1] = [0, 0, 255]
+    if len(w) > 30:
+        for i in range(-1, -25, -3):
+            trails[int(h[i]), int(w[i])] = [0, 0, 255]
+            trails[int(h[i]) + 1, int(w[i])] = [0, 0, 255]
+            trails[int(h[i]), int(w[i]) + 1] = [0, 0, 255]
+            trails[int(h[i]) - 1, int(w[i])] = [0, 0, 255]
+            trails[int(h[i]), int(w[i]) - 1] = [0, 0, 255]
     cv.imshow('Trails', trails)
-    keyboard = cv.waitKey(5)
+    cv.waitKey(100)
+
     return
 
-# video_path: local path for video file
-# frame_size: overall size of the original frame
-# frame_start: where should the top-left corner of the trimmed frame be located on the original video
-# start: which frame (starting from 1) to start porcess
-# end: which frame to end process
-# color: currently only yellow available
-# d2pixel: actual distance to pixel length, default set to 1
-# display: display the trails with a open video window if set to True
 
-def drop_tracker_csv(video_path, fps, frame_size_w, frame_size_h, frame_start_w, frame_start_h, start=1,
-                     end=100000000000000, color="yellow", d2pixel=1, display=False):
-
+def drop_tracker(video_path, fps, position, start=1, end=-1, color="yellow", d2pixel=1, file_path="time-series.csv"):
     vid = cv.VideoCapture(video_path)  # open the video from input path
     length = int(vid.get(cv.CAP_PROP_FRAME_COUNT))  # find the length of the video
-    count = 0
+    vid.set(cv.CAP_PROP_POS_FRAMES, start - 1)
 
-    if end == 100000000000000:
-        end = length - 1  # assign of the end frame for analysis
-
+    frame_count = 0
     w = []  # lists for centroid storage
     h = []
     t = []
-    inw = []  # list for interger values of centroid, only for trails display
-    inh = []
+
+    if end == -1:
+        end = length - 1  # assign of the end frame for analysis
 
     while vid.isOpened():
         ret, frame = vid.read()
-        frame = frame[frame_start_h:frame_size_h - frame_start_h, frame_start_w:frame_size_w - frame_start_w]
-        # cutting down the frame
-        count = count + 1
+        frame_count = frame_count + 1
 
-        if count < start:
-            continue
-        if count == end:
+        if frame_count == 1:
+            height, width = frame.shape[:2]
+
+        if frame_count > end - start:
             break
 
-        processed_frame = coloriden_th_frame(frame, color) # get the black-and-white frame
+        # print(frame_count)
 
-        m = cv.moments(processed_frame) # calculates the moments. see en.wikipedia.org/wiki/Image_moment
-        # print(M)
-        cw = (m['m10'] / m['m00']) # calculates the centroid
-        ch = (m['m01'] / m['m00'])
-        inch = int(m['m01'] / m['m00']) # calculates the centroid trimmed to intergers for displaying trails
-        incw = int(m['m10'] / m['m00'])
+        cutted_frame = frame_cutter(frame, "center", position)  # cutting down the frame
 
-        # print(cw, ch)
+        # print(frame_count)
+
+        filtered_frame, res_th = drop_filter(cutted_frame,
+                                             color)  # get the black-and-white frame with only drop as white
+
+        cw, ch = centroid_calculation(filtered_frame)
+
         w.append(cw)
         h.append(ch)
-        t.append((count - 1) * fps)
+        t.append(frame_count / fps)
 
-        inw.append(incw)
-        inh.append(inch)
+        if (frame_count) % 10 == 0:  # output frame-processing progress in terms of number of frames processed
+            print(frame_count)
 
-        if display:
-            show_trails(frame, inw, inh) # show trails on displayed frame
+        trail_display(cutted_frame, w, h)
+        cv.imshow("grey", filtered_frame)
 
-        # cv.imshow('Frame', frame)
-        # cv.imshow('Trails', trails)
-        # cv.imshow('Threshhold', th)
-        # cv.imshow('FG Mask', fgMask)
-        # cv.imshow('Edges', edges)
-        # cv.imshow('Color', res)
-        # cv.imshow('Color', res_grey)
-        # cv.imshow('Color_Grey', res_th2)
-        # cv.imshow('Color', dilation)
-
-        if (count % 100 == 0): # output frame-processing progress in terms of number of frames processed
-            print(count)
-
-    x = (np.array(w) + frame_start_w) * d2pixel
-    y = (np.array(h) + frame_start_h) * d2pixel
+    x = (np.array(w) + position[1][1] - height // 2) * d2pixel
+    y = (np.array(h) + position[0][1] - width // 2) * d2pixel
     t = np.array(t)
-    pd.DataFrame(t, x, y).to_csv(video_path + "_time-series.csv") # output of the csv file
+
+    csv_output(t, x, y, file_path)
 
     vid.release()
     cv.destroyAllWindows()
 
 
 def main():
-    drop_tracker_csv("033121_0cm_4ml_225C_yellow_elec_edited.mp4", 60, 600, 300, 1920, 1080, display = True)
+    position = [[720, 1440], [1280, 2560]]
+    drop_tracker("033121_5cm_6ml_225C_yellow_elec.mp4", 60, position, start=9000, end=18000, color="yellow",
+                 d2pixel=0.0652647, file_path="mass5.csv")
     # this is the place for testing
 
 
